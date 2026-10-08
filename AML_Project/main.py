@@ -4,6 +4,12 @@ from pathlib import Path
 
 from compiler.lexer import build_lexer
 from compiler.parser import parse_source
+from compiler.ast_nodes import DepositNode, TransferNode, WithdrawNode
+from analysis.circular_transfer import detect_circular_transfers
+from analysis.report import generate_report
+from analysis.risk_score import calculate_risk_scores
+from analysis.structuring import detect_structuring
+from analysis.temporal_analysis import detect_high_frequency
 
 
 # Resolve the sample file from the project location, not the current shell folder.
@@ -44,6 +50,26 @@ def main():
         return 1
 
     print(program)
+
+    structuring_findings = detect_structuring(program)
+    circular_cycles = detect_circular_transfers(program)
+    temporal_findings = detect_high_frequency(program)
+    risk_scores = calculate_risk_scores(
+        program,
+        structuring_findings,
+        circular_cycles,
+        temporal_findings,
+    )
+
+    accounts = set()
+    for statement in program.statements:
+        if isinstance(statement, TransferNode):
+            accounts.update((statement.source_account, statement.destination_account))
+        elif isinstance(statement, (DepositNode, WithdrawNode)):
+            accounts.add(statement.account_id)
+
+    print()
+    print(generate_report(risk_scores, total_accounts=len(accounts)))
     return 0
 
 

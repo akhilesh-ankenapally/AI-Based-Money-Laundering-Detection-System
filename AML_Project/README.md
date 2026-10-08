@@ -1,8 +1,6 @@
 # AI-Based Money Laundering Detection System
 
-This project is the compiler frontend foundation for a college CBP project. It reads a small banking transaction language, performs lexical analysis with PLY Lex, parses the statements with PLY Yacc, and builds a readable Abstract Syntax Tree (AST).
-
-The current version intentionally does **not** implement money laundering detection, graph analysis, three-address code, machine code, networking, CRC, Dijkstra's algorithm, or AI features. Those can be added after the frontend foundation is stable.
+This project reads a small banking transaction language, performs lexical analysis with PLY Lex, parses the statements with PLY Yacc, builds a readable Abstract Syntax Tree (AST), and runs an explainable money laundering detection layer on that AST.
 
 ## Supported Language
 
@@ -37,6 +35,13 @@ AML_Project/
 |   |-- parser.py           PLY Yacc grammar and AST creation
 |   `-- ast_nodes.py        Program and transaction AST classes
 |
+|-- analysis/
+|   |-- structuring.py      Below-threshold transfer detection
+|   |-- circular_transfer.py NetworkX cycle detection
+|   |-- temporal_analysis.py High-frequency activity detection
+|   |-- risk_score.py       Rule-based risk scoring
+|   `-- report.py           Readable AML report generation
+|
 |-- main.py                 Program entry point
 |-- requirements.txt        Python dependency list
 `-- README.md               Project documentation
@@ -48,8 +53,9 @@ AML_Project/
 - `compiler/ast_nodes.py` defines `ProgramNode`, `DepositNode`, `WithdrawNode`, and `TransferNode`.
 - `compiler/lexer.py` recognizes keywords, account IDs, amounts, and semicolons while reporting lexical errors.
 - `compiler/parser.py` defines the transaction grammar and creates AST nodes.
-- `main.py` reads the sample file, displays tokens, parses the source, and prints the AST.
-- `requirements.txt` pins PLY version 3.11.
+- `main.py` reads the sample file, displays tokens, parses the source, prints the AST, and prints the AML report.
+- `analysis/` consumes the existing AST transaction nodes and does not define a second transaction model.
+- `requirements.txt` pins PLY and NetworkX versions.
 
 ## Installation
 
@@ -80,6 +86,39 @@ The program automatically loads `data/transactions.txt` using a path relative to
 python C:\path\to\AML_Project\main.py
 ```
 
+## AML Detection Architecture
+
+```text
+transactions.txt -> Lexer -> Parser -> AST
+    -> Structuring -> Circular Transfer -> Temporal Analysis
+    -> Risk Scoring -> AML Report
+```
+
+The lexer and parser remain unchanged. The analysis modules inspect `ProgramNode.statements` and reuse `TransferNode`, `DepositNode`, and `WithdrawNode` directly.
+
+### Structuring Detection
+
+`detect_structuring()` groups transfer amounts by source account. By default, it flags an account when at least two transfers are between 95% and 100% of the configurable threshold of 50000. Each finding includes the account, suspicious amounts, and an explanation.
+
+### Circular Transfer Detection
+
+`detect_circular_transfers()` builds a directed NetworkX graph. Accounts are nodes and transfers are edges. NetworkX `simple_cycles()` returns loops such as `ACC3001 -> ACC4001 -> ACC5001 -> ACC3001`.
+
+### Temporal Analysis
+
+`detect_high_frequency()` counts transactions involving each account inside a configurable `window_minutes` and requires a configurable `minimum_transaction_count`. The existing grammar has no timestamp token, so statement order is used as time: each parsed statement represents one minute by default. This keeps the transaction language unchanged and deterministic. The function accepts `transaction_interval_minutes` for experiments or future timestamp support.
+
+### Risk Scoring
+
+The rule-based score is capped at 100:
+
+- Structuring: +40
+- Circular transfer: +30
+- High-frequency activity: +20
+- Large transfer: +10
+
+Risk levels are LOW for 0-30, MEDIUM for 31-60, and HIGH for 61 or more. Reasons are retained alongside each score so the report remains explainable.
+
 ## Expected Output
 
 The first part displays tokens similar to:
@@ -109,7 +148,28 @@ PROGRAM
     `-- amount: 49000
 ```
 
-The sample file contains 15 valid statements, so the complete AST contains 15 transaction branches.
+The sample file contains 12 valid statements, so the complete AST contains 12 transaction branches. It includes structuring, a circular transfer, high-frequency activity, and one normal deposit.
+
+The AML section includes output similar to:
+
+```text
+AML ANALYSIS REPORT
+Total Accounts: 14
+Suspicious Accounts: 5
+
+Account: ACC1001
+Risk Score: 60
+Risk Level: MEDIUM
+Reasons:
+- Structuring detected
+- High frequency activity
+
+Account: ACC6001
+Risk Score: 20
+Risk Level: LOW
+Reasons:
+- High frequency activity
+```
 
 ## Testing Checklist
 
@@ -122,6 +182,8 @@ The current sample execution tests:
 5. Comment and whitespace ignoring.
 6. Parsing all three statement forms.
 7. AST creation and readable tree output.
+8. Structuring, circular transfer, and high-frequency AML findings.
+9. Risk scores and readable report generation.
 
 For a quick lexer-only check, run:
 
@@ -181,13 +243,4 @@ The parser creates `ProgramNode`, `DepositNode`, `WithdrawNode`, and `TransferNo
 
 ## Current Scope
 
-This milestone ends after frontend AST generation. The next project milestones may build on this AST, but they are intentionally not included yet:
-
-- money laundering detection
-- graph analysis
-- three-address code generation
-- machine code generation
-- networking
-- CRC
-- Dijkstra algorithm
-- AI or machine-learning features
+This milestone includes the compiler frontend and explainable AML detection layer. Three-address code generation, machine code generation, networking, CRC, Dijkstra's algorithm, and machine-learning features remain outside the current scope.
