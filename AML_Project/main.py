@@ -4,12 +4,9 @@ from pathlib import Path
 
 from compiler.lexer import build_lexer
 from compiler.parser import parse_source
-from compiler.ast_nodes import DepositNode, TransferNode, WithdrawNode
-from analysis.circular_transfer import detect_circular_transfers
+from analysis.pipeline import analyze_program
 from analysis.report import generate_report
-from analysis.risk_score import calculate_risk_scores
-from analysis.structuring import detect_structuring
-from analysis.temporal_analysis import detect_high_frequency
+from exports.report_export import export_reports
 
 
 # Resolve the sample file from the project location, not the current shell folder.
@@ -51,25 +48,33 @@ def main():
 
     print(program)
 
-    structuring_findings = detect_structuring(program)
-    circular_cycles = detect_circular_transfers(program)
-    temporal_findings = detect_high_frequency(program)
-    risk_scores = calculate_risk_scores(
-        program,
-        structuring_findings,
-        circular_cycles,
-        temporal_findings,
+    results = analyze_program(program)
+    report_text = generate_report(results["risk_scores"], results["total_accounts"])
+    export_paths = export_reports(
+        PROJECT_ROOT / "exports",
+        report_text,
+        results["risk_scores"],
+        results["anomaly_results"],
+        results["graph_statistics"],
     )
 
-    accounts = set()
-    for statement in program.statements:
-        if isinstance(statement, TransferNode):
-            accounts.update((statement.source_account, statement.destination_account))
-        elif isinstance(statement, (DepositNode, WithdrawNode)):
-            accounts.add(statement.account_id)
-
     print()
-    print(generate_report(risk_scores, total_accounts=len(accounts)))
+    print(report_text)
+    print()
+    print("GRAPH STATISTICS")
+    print("Nodes: " + str(results["graph_statistics"]["node_count"]))
+    print("Edges: " + str(results["graph_statistics"]["edge_count"]))
+    print("Cycles: " + str(results["graph_statistics"]["cycle_count"]))
+    print()
+    print("AI ANOMALY OUTPUT")
+    for anomaly in results["anomaly_results"]:
+        print(
+            anomaly["account"] + ": " + str(anomaly["score"])
+            + " (" + anomaly["classification"] + ")"
+        )
+    print()
+    print("Reports exported to: " + str(export_paths["txt"]))
+    print("Reports exported to: " + str(export_paths["csv"]))
     return 0
 
 

@@ -1,0 +1,7 @@
+record_type,account,risk_score,risk_level,reasons,anomaly_score,classification,nodes,edges,cycles,top_connected_accounts
+account,ACC1001,60,MEDIUM,Structuring detected; High frequency activity,68.25,SUSPICIOUS,,,,
+account,ACC3001,30,LOW,Circular transfer detected,55.06,SUSPICIOUS,,,,
+account,ACC4001,30,LOW,Circular transfer detected,55.06,SUSPICIOUS,,,,
+account,ACC5001,30,LOW,Circular transfer detected,55.06,SUSPICIOUS,,,,
+account,ACC6001,20,LOW,High frequency activity,67.61,SUSPICIOUS,,,,
+graph_summary,,,,,,,13,11,1,ACC1001; ACC6001; ACC3001; ACC4001; ACC5001

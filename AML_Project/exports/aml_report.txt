@@ -1,0 +1,79 @@
+# =================================
+AML ANALYSIS REPORT
+Total Accounts: 14
+
+Suspicious Accounts: 5
+
+---
+Account: ACC1001
+
+Risk Score: 60
+
+Risk Level: MEDIUM
+
+Reasons:
+- Structuring detected
+- High frequency activity
+
+---
+Account: ACC3001
+
+Risk Score: 30
+
+Risk Level: LOW
+
+Reasons:
+- Circular transfer detected
+
+---
+Account: ACC4001
+
+Risk Score: 30
+
+Risk Level: LOW
+
+Reasons:
+- Circular transfer detected
+
+---
+Account: ACC5001
+
+Risk Score: 30
+
+Risk Level: LOW
+
+Reasons:
+- Circular transfer detected
+
+---
+Account: ACC6001
+
+Risk Score: 20
+
+Risk Level: LOW
+
+Reasons:
+- High frequency activity
+=================================
+
+GRAPH STATISTICS
+Nodes: 13
+Edges: 11
+Cycles: 1
+Suspicious hubs: ACC1001, ACC6001
+
+AI ANOMALY RESULTS
+ACC1001: 68.25 (SUSPICIOUS)
+ACC6001: 67.61 (SUSPICIOUS)
+ACC8001: 64.51 (SUSPICIOUS)
+ACC3001: 55.06 (SUSPICIOUS)
+ACC4001: 55.06 (SUSPICIOUS)
+ACC5001: 55.06 (SUSPICIOUS)
+ACC2003: 49.54 (NORMAL)
+ACC2004: 47.07 (NORMAL)
+ACC7004: 45.95 (NORMAL)
+ACC7001: 45.87 (NORMAL)
+ACC2001: 45.19 (NORMAL)
+ACC2002: 44.69 (NORMAL)
+ACC7002: 43.85 (NORMAL)
+ACC7003: 43.71 (NORMAL)

@@ -28,7 +28,7 @@ The lexer ignores spaces, tabs, newlines, and comments beginning with `//`. Acco
 AML_Project/
 |
 |-- data/
-|   `-- transactions.txt    Sample input with 15 transactions
+|   `-- transactions.txt    Sample input with 12 transactions
 |
 |-- compiler/
 |   |-- lexer.py            PLY lexical analyzer
@@ -39,8 +39,19 @@ AML_Project/
 |   |-- structuring.py      Below-threshold transfer detection
 |   |-- circular_transfer.py NetworkX cycle detection
 |   |-- temporal_analysis.py High-frequency activity detection
+|   |-- anomaly_detection.py IsolationForest anomaly detection
+|   |-- pipeline.py          Shared AML and analytics pipeline
 |   |-- risk_score.py       Rule-based risk scoring
 |   `-- report.py           Readable AML report generation
+|
+|-- graph/
+|   `-- transaction_graph.py NetworkX graph and shortest-path analytics
+|
+|-- exports/
+|   `-- report_export.py    TXT and CSV report export
+|
+|-- dashboard/
+|   `-- app.py              Streamlit dashboard
 |
 |-- main.py                 Program entry point
 |-- requirements.txt        Python dependency list
@@ -55,7 +66,7 @@ AML_Project/
 - `compiler/parser.py` defines the transaction grammar and creates AST nodes.
 - `main.py` reads the sample file, displays tokens, parses the source, prints the AST, and prints the AML report.
 - `analysis/` consumes the existing AST transaction nodes and does not define a second transaction model.
-- `requirements.txt` pins PLY and NetworkX versions.
+- `requirements.txt` lists PLY, NetworkX, scikit-learn, Streamlit, Plotly, Pandas, and NumPy.
 
 ## Installation
 
@@ -91,7 +102,8 @@ python C:\path\to\AML_Project\main.py
 ```text
 transactions.txt -> Lexer -> Parser -> AST
     -> Structuring -> Circular Transfer -> Temporal Analysis
-    -> Risk Scoring -> AML Report
+    -> Risk Scoring -> Graph Analytics -> AI Anomaly Detection
+    -> TXT/CSV Export -> AML Report and Dashboard
 ```
 
 The lexer and parser remain unchanged. The analysis modules inspect `ProgramNode.statements` and reuse `TransferNode`, `DepositNode`, and `WithdrawNode` directly.
@@ -118,6 +130,37 @@ The rule-based score is capped at 100:
 - Large transfer: +10
 
 Risk levels are LOW for 0-30, MEDIUM for 31-60, and HIGH for 61 or more. Reasons are retained alongside each score so the report remains explainable.
+
+## Graph Analytics
+
+`graph/transaction_graph.py` builds a directed NetworkX graph from `TransferNode` objects. Each account is a node and each transfer is a directed edge. It reports node count, edge count, degree statistics, top connected accounts, suspicious hubs, and cycles. A suspicious hub is an account whose total in-degree plus out-degree reaches the configured minimum.
+
+The `TransactionGraph.find_shortest_path(source_account, destination_account)` helper uses NetworkX Dijkstra-compatible shortest-path analysis and returns both the account chain and its edge count. For example, a direct transfer returns `{"path": ["ACC1001", "ACC2004"], "path_length": 1}`.
+
+## AI Anomaly Detection
+
+`analysis/anomaly_detection.py` creates one feature row per account using average transaction amount, transaction frequency, in-degree, and out-degree. A deterministic scikit-learn `IsolationForest` assigns an anomaly score from 0 to 100 and classifies each account as `NORMAL` or `SUSPICIOUS`. This is intentionally lightweight and explainable for a college project: the score is a model signal and can be compared with the rule-based risk score.
+
+## Dashboard
+
+Start the interactive dashboard from the `AML_Project` folder:
+
+```powershell
+streamlit run dashboard/app.py
+```
+
+The dashboard contains project overview metrics, a filtered risk register, Plotly risk charts, graph statistics, a curved Plotly/NetworkX account diagram, AI anomaly results, and the generated AML report. The dashboard reads the same `data/transactions.txt` file and calls the same shared pipeline as `main.py`.
+
+### Dashboard Screenshots
+
+Run the dashboard locally and capture screenshots of the Overview, Risk Analysis, Graph Analytics, AI Detection, and AML Report sections for a project presentation. The graph visualization is generated at runtime from the parsed transfer AST, so screenshots remain tied to the sample input.
+
+## Report Export
+
+Running `python main.py` writes these files under `exports/`:
+
+- `aml_report.txt` contains the readable AML report, graph statistics, and anomaly results.
+- `aml_report.csv` contains account risk and anomaly rows plus a graph summary row.
 
 ## Expected Output
 
@@ -184,6 +227,10 @@ The current sample execution tests:
 7. AST creation and readable tree output.
 8. Structuring, circular transfer, and high-frequency AML findings.
 9. Risk scores and readable report generation.
+10. Graph node, edge, cycle, hub, and shortest-path analysis.
+11. IsolationForest anomaly scores and classifications.
+12. TXT and CSV report export.
+13. Streamlit dashboard startup.
 
 For a quick lexer-only check, run:
 
