@@ -1,6 +1,7 @@
-"""Professional Streamlit presentation layer for the AML analysis platform."""
+"""AML Intelligence Streamlit investigation workspace."""
 
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -13,368 +14,752 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from analysis.filtering import filter_accounts, filter_patterns, filter_transactions
 from analysis.pipeline import analyze_program
 from analysis.report import generate_report
-from compiler.parser import parse_source
+from data.csv_ingestion import load_transactions_csv
+from data.generate_dataset import generate_dataset
+from dashboard.workflow import (
+    DISCLAIMER, ORGANIZATION, PLATFORM, TAGLINE, DEMO_USERS, PERMISSIONS,
+    append_audit, authenticate, can, create_case, load_audit, load_cases, update_case,
+)
 
 
 TRANSACTIONS_FILE = PROJECT_ROOT / "data" / "transactions.txt"
-RISK_COLORS = {"LOW": "#27c499", "MEDIUM": "#f5b942", "HIGH": "#f05d5e"}
-PLOTLY_TEMPLATE = "plotly_dark"
+GENERATED_DIR = PROJECT_ROOT / "data" / "generated"
+CASES_FILE = PROJECT_ROOT / "data" / "workflow_cases.json"
+AUDIT_FILE = PROJECT_ROOT / "data" / "audit_log.json"
+RISK_COLORS = {"LOW": "#37c7a0", "MEDIUM": "#f0b35b", "HIGH": "#ee6b6e"}
+ACCENT = "#5b8def"
+TEMPLATE = "plotly_dark"
 
 
 @st.cache_data(show_spinner=False)
-def load_results():
-    """Parse and analyze the source once per input file state."""
-    source_text = TRANSACTIONS_FILE.read_text(encoding="utf-8")
-    program = parse_source(source_text)
-    if program is None:
-        raise ValueError("The transaction file could not be parsed.")
-    return analyze_program(program)
+def load_dataset(dataset_path, accounts_path, dataset_version=None):
+    """Load and validate the selected dataset, returning the real profile metadata."""
+    transactions_path = Path(dataset_path)
+    accounts_path = Path(accounts_path)
+    account_rows = pd.read_csv(accounts_path, usecols=["account_id"])
+    account_ids = set(account_rows["account_id"].astype(str))
+    program = load_transactions_csv(transactions_path)
+    records = []
+    timestamps = []
+    for statement in program.statements:
+        timestamp = getattr(statement, "timestamp", None)
+        if timestamp:
+            timestamps.append(pd.Timestamp(timestamp))
+        if hasattr(statement, "source_account") and statement.source_account:
+            records.append(statement.source_account)
+        if hasattr(statement, "destination_account") and statement.destination_account:
+            records.append(statement.destination_account)
+        if hasattr(statement, "account_id"):
+            records.append(statement.account_id)
+    referenced_accounts = set(records)
+    invalid = referenced_accounts - account_ids
+    if invalid:
+        raise ValueError("Dataset references unknown accounts: " + ", ".join(sorted(invalid)[:5]))
+    if len(account_ids) != len(account_rows):
+        raise ValueError("The account file contains duplicate account IDs.")
+    if not timestamps:
+        raise ValueError("The selected dataset has no timestamps.")
+    return {
+        "program": program,
+        "account_count": len(account_ids),
+        "transaction_count": len(program.statements),
+        "transaction_volume": sum(statement.amount for statement in program.statements),
+        "start_date": min(timestamps).date().isoformat(),
+        "end_date": max(timestamps).date().isoformat(),
+        "dataset_path": str(transactions_path),
+        "account_path": str(accounts_path),
+    }
+
+
+@st.cache_data(show_spinner="Running AML analysis on the selected dataset...")
+def load_results(dataset_path, accounts_path, tolerance_percent, absolute_tolerance, minimum_transactions,
+                 minimum_accounts, transaction_types, dataset_version=None):
+    """Analyze the validated CSV dataset through the existing AML pipeline."""
+    dataset = load_dataset(dataset_path, accounts_path, dataset_version)
+    started = time.perf_counter()
+    results = analyze_program(
+        dataset["program"],
+        similarity_tolerance_percent=tolerance_percent,
+        similarity_absolute_tolerance=absolute_tolerance,
+        similarity_minimum_transactions=minimum_transactions,
+        similarity_minimum_accounts=minimum_accounts,
+        similarity_transaction_types=transaction_types,
+        max_graph_cycles=0 if dataset["transaction_count"] > 50000 else 200,
+        enable_similarity=dataset["transaction_count"] <= 50000,
+    )
+    results["analysis_seconds"] = round(time.perf_counter() - started, 2)
+    return results
 
 
 def inject_styles():
-    """Apply restrained enterprise dashboard styling."""
     st.markdown(
         """
         <style>
-        .stApp { background: #0b111b; color: #e7edf5; }
-        [data-testid="stHeader"] { background: rgba(11, 17, 27, 0.94); }
-        [data-testid="stSidebar"] { background: #101927; border-right: 1px solid #223149; }
-        .block-container { max-width: 1500px; padding-top: 2rem; padding-bottom: 3rem; }
-        .eyebrow { color: #7f94ae; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
-        .hero-title { color: #f4f7fb; font-size: 2.15rem; font-weight: 700; letter-spacing: -0.02em; margin: 0.15rem 0 0.25rem; }
-        .hero-subtitle { color: #91a3b8; font-size: 0.98rem; margin-bottom: 1.4rem; }
-        .section-kicker { color: #6f849f; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
-        .section-title { color: #f4f7fb; font-size: 1.25rem; font-weight: 650; margin: 0.15rem 0 0.8rem; }
-        div[data-testid="stMetric"] { background: #121d2c; border: 1px solid #24344c; border-radius: 8px; padding: 1rem 1.1rem; }
-        div[data-testid="stMetricLabel"] { color: #91a3b8; }
-        div[data-testid="stMetricValue"] { color: #f4f7fb; }
-        .source-note { color: #6f849f; font-size: 0.78rem; margin-top: 0.55rem; }
+        .stApp { background: #0b1220; color: #e8eef8; }
+        [data-testid="stSidebar"] { background: #101a2c; border-right: 1px solid #263856; }
+        .block-container { max-width: 1540px; padding: 1.25rem 2.25rem 3rem; }
+        [data-testid="stHeader"] { background: rgba(11, 18, 32, .96); }
+        [data-testid="stToolbar"] { right: .75rem; }
+        @media (max-width: 900px) {
+            .block-container { padding-left: 1rem; padding-right: 1rem; }
+        }
+        .eyebrow { color: #8ea3c0; font-size: .72rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+        .hero-title { color: #f6f8fc; font-size: 2.2rem; font-weight: 750; letter-spacing: -.03em; margin: .1rem 0 .2rem; }
+        .hero-subtitle { color: #9caec6; margin-bottom: 1.4rem; }
+        div[data-testid="stMetric"] { background: #121f34; border: 1px solid #2b3d5b; border-radius: 10px; padding: .8rem .9rem; min-height: 96px; }
+        div[data-testid="stMetricLabel"] { white-space: normal; line-height: 1.25; }
+        div[data-testid="stMetricValue"] { font-size: clamp(1.15rem, 2vw, 1.8rem); line-height: 1.15; }
+        div[data-testid="stDataFrame"] { border: 1px solid #263856; border-radius: 8px; overflow: hidden; }
+        .section-rule { border-top: 1px solid #263856; margin: 1.2rem 0 .9rem; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-def section_heading(kicker, title, description=None):
-    st.markdown('<div class="section-kicker">' + kicker + "</div>", unsafe_allow_html=True)
-    st.markdown('<div class="section-title">' + title + "</div>", unsafe_allow_html=True)
-    if description:
-        st.caption(description)
+def empty_state(message):
+    st.info(message)
 
 
-def risk_rows(results, minimum_score, selected_level, suspicious_only):
-    rows = []
-    for item in results["risk_scores"].values():
-        if item["score"] < minimum_score:
-            continue
-        if selected_level != "ALL" and item["level"] != selected_level:
-            continue
-        if suspicious_only and item["score"] == 0:
-            continue
-        rows.append({
-            "Account": item["account"],
-            "Risk Score": item["score"],
-            "Risk Level": item["level"],
-            "Flags": "; ".join(item["reasons"]) or "No flags",
-        })
-    return sorted(rows, key=lambda row: (-row["Risk Score"], row["Account"]))
+def chart_layout(figure, height=330):
+    figure.update_layout(
+        template=TEMPLATE, height=height, margin=dict(l=12, r=12, t=28, b=12),
+        paper_bgcolor="#121f34", plot_bgcolor="#121f34",
+        legend=dict(orientation="h", y=1.08),
+    )
+    return figure
 
 
-def style_risk_table(dataframe):
-    def row_style(row):
-        color = RISK_COLORS.get(row["Risk Level"], "#91a3b8")
-        return ["color: " + color + "; font-weight: 700" if column == "Risk Level" else "" for column in row.index]
-
-    return dataframe.style.apply(row_style, axis=1)
-
-
-def show_table(rows, columns, styled=False):
-    if not rows:
-        st.info("No data available")
-        return
-    dataframe = pd.DataFrame(rows, columns=columns)
-    if styled:
-        st.dataframe(style_risk_table(dataframe), use_container_width=True, hide_index=True)
-    else:
-        st.dataframe(dataframe, use_container_width=True, hide_index=True)
+def risk_chart(accounts):
+    counts = pd.Series([item["risk_level"] for item in accounts]).value_counts()
+    frame = pd.DataFrame({
+        "Risk Level": ["LOW", "MEDIUM", "HIGH"],
+        "Accounts": [int(counts.get(level, 0)) for level in ("LOW", "MEDIUM", "HIGH")],
+    })
+    return chart_layout(px.bar(frame, x="Risk Level", y="Accounts", color="Risk Level",
+        color_discrete_map=RISK_COLORS, text="Accounts"), 310)
 
 
-def make_risk_distribution(results):
-    counts = {level: 0 for level in ("LOW", "MEDIUM", "HIGH")}
-    for item in results["risk_scores"].values():
-        counts[item["level"]] += 1
-    dataframe = pd.DataFrame({"Risk Level": list(counts), "Accounts": list(counts.values())})
-    return px.bar(
-        dataframe,
-        x="Risk Level",
-        y="Accounts",
-        color="Risk Level",
-        color_discrete_map=RISK_COLORS,
-        template=PLOTLY_TEMPLATE,
-        height=300,
-    ).update_layout(showlegend=False, margin=dict(l=10, r=10, t=20, b=10), xaxis_title=None)
-
-
-def make_top_risk_chart(results):
-    rows = sorted(results["risk_scores"].values(), key=lambda item: item["score"], reverse=True)[:10]
-    if not rows:
+def top_accounts_chart(accounts, metric="risk_score", top_n=10):
+    if not accounts:
         return None
-    dataframe = pd.DataFrame({"Account": [row["account"] for row in rows], "Risk Score": [row["score"] for row in rows]})
-    return px.bar(
-        dataframe.sort_values("Risk Score"),
-        x="Risk Score",
-        y="Account",
-        orientation="h",
-        color="Risk Score",
-        color_continuous_scale=[[0, "#27c499"], [0.6, "#f5b942"], [1, "#f05d5e"]],
-        template=PLOTLY_TEMPLATE,
-        height=300,
-    ).update_layout(coloraxis_showscale=False, margin=dict(l=10, r=10, t=20, b=10), yaxis_title=None)
+    labels = {"risk_score": "Risk Score", "suspicious_transaction_count": "Suspicious Transactions",
+              "suspicious_transaction_amount": "Suspicious Amount"}
+    frame = pd.DataFrame([
+        {"Account": item["account"], labels[metric]: item[metric]} for item in accounts
+    ]).sort_values(labels[metric]).tail(top_n)
+    return chart_layout(px.bar(frame, x=labels[metric], y="Account", orientation="h",
+        color=labels[metric], color_continuous_scale=["#37c7a0", "#f0b35b", "#ee6b6e"]),
+        360).update_layout(coloraxis_showscale=False, yaxis_title=None)
 
 
-def make_detection_chart(results):
-    counts = {"Structuring": 0, "Circular Transfer": 0, "High Frequency": 0, "Large Transfer": 0}
-    labels = {
-        "Structuring detected": "Structuring",
-        "Circular transfer detected": "Circular Transfer",
-        "High frequency activity": "High Frequency",
-        "Large transfer detected": "Large Transfer",
-    }
-    for item in results["risk_scores"].values():
-        for reason in item["reasons"]:
-            if reason in labels:
-                counts[labels[reason]] += 1
-    dataframe = pd.DataFrame({"Detection Type": list(counts), "Accounts": list(counts.values())})
-    return px.bar(
-        dataframe,
-        x="Detection Type",
-        y="Accounts",
-        color="Detection Type",
-        color_discrete_sequence=["#4c8dff", "#b18cff", "#f5b942", "#f05d5e"],
-        template=PLOTLY_TEMPLATE,
-        height=300,
-    ).update_layout(showlegend=False, margin=dict(l=10, r=10, t=20, b=10), xaxis_title=None)
-
-
-def graph_figure(graph, risk_scores, cycles):
-    """Create a presentation-ready curved-edge Plotly account graph."""
+def graph_figure(graph, accounts, cycles, max_nodes=40):
     if graph.number_of_nodes() == 0:
         return None
-
-    positions = nx.spring_layout(graph, seed=42, k=1.6, iterations=100, scale=2.2)
-    suspicious = set(risk_scores)
+    allowed = {item["account"] for item in accounts}
+    nodes = sorted(allowed.intersection(graph.nodes), key=lambda node: graph.degree(node), reverse=True)
+    nodes = nodes[:max_nodes]
+    graph = graph.subgraph(nodes).copy()
+    if graph.number_of_nodes() == 0:
+        return None
+    positions = nx.spring_layout(graph, seed=42, k=1.5, iterations=80)
     cycle_accounts = {account for cycle in cycles for account in cycle}
+    risk_by_account = {item["account"]: item for item in accounts}
     edge_x, edge_y = [], []
     for source, target in graph.edges:
-        start_x, start_y = positions[source]
-        end_x, end_y = positions[target]
-        mid_x, mid_y = (start_x + end_x) / 2, (start_y + end_y) / 2
-        offset_x, offset_y = -(end_y - start_y) * 0.12, (end_x - start_x) * 0.12
-        edge_x.extend([start_x, mid_x + offset_x, end_x, None])
-        edge_y.extend([start_y, mid_y + offset_y, end_y, None])
+        x1, y1 = positions[source]
+        x2, y2 = positions[target]
+        edge_x.extend([x1, x2, None])
+        edge_y.extend([y1, y2, None])
+    figure = go.Figure(go.Scatter(x=edge_x, y=edge_y, mode="lines",
+        line=dict(color="#536886", width=1.5), hoverinfo="none", showlegend=False))
+    figure.add_trace(go.Scatter(
+        x=[positions[node][0] for node in graph.nodes],
+        y=[positions[node][1] for node in graph.nodes],
+        mode="markers+text", text=list(graph.nodes), textposition="top center",
+        marker=dict(
+            size=[18 + graph.degree(node) * 6 for node in graph.nodes],
+            color=[RISK_COLORS.get(risk_by_account.get(node, {}).get("risk_level"), ACCENT)
+                   for node in graph.nodes],
+            line=dict(color=["#ee6b6e" if node in cycle_accounts else "#dbe7f6"
+                             for node in graph.nodes], width=2),
+        ),
+        hovertemplate="<b>%{text}</b><br>Connections: %{customdata}<extra></extra>",
+        customdata=[graph.degree(node) for node in graph.nodes],
+        showlegend=False,
+    ))
+    return chart_layout(figure, 570).update_layout(xaxis_visible=False, yaxis_visible=False)
 
-    node_x = [positions[node][0] for node in graph.nodes]
-    node_y = [positions[node][1] for node in graph.nodes]
-    node_colors = [
-        RISK_COLORS.get(risk_scores[node]["level"], "#4c8dff") if node in suspicious
-        else "#4c8dff"
-        for node in graph.nodes
+
+def records_frame(records, suspicious_indices):
+    rows = []
+    suspicious = set(suspicious_indices)
+    for record in records:
+        rows.append({
+            "Transaction": record["transaction_id"], "Type": record["type"],
+            "Source": record["source_account"] or "-", "Destination": record["destination_account"] or "-",
+            "Amount": record["amount"], "Status": "REVIEW" if record["index"] in suspicious else "NORMAL",
+        })
+    return pd.DataFrame(rows)
+
+
+def paged_frame(frame, key, page_size=50):
+    """Render a bounded table while keeping the complete filtered frame exportable."""
+    if frame.empty:
+        empty_state("No records match the current filters.")
+        return
+    page_count = max(1, (len(frame) + page_size - 1) // page_size)
+    page = st.number_input(
+        "Page", min_value=1, max_value=page_count, value=1, step=1, key=key,
+    )
+    start = (page - 1) * page_size
+    st.caption(f"Showing rows {start + 1:,}-{min(start + page_size, len(frame)):,} of {len(frame):,}.")
+    st.dataframe(frame.iloc[start:start + page_size], use_container_width=True, hide_index=True)
+
+
+def render_overview(accounts, transactions, patterns):
+    st.markdown("#### Executive overview")
+    if not accounts:
+        empty_state("No accounts match the current filters.")
+        return
+    left, middle, right = st.columns(3)
+    with left:
+        st.plotly_chart(chart_layout(risk_chart(accounts).update_layout(
+            title="Risk distribution — filtered accounts",
+        ), 310), use_container_width=True, config={"displayModeBar": False})
+    with middle:
+        figure = top_accounts_chart(accounts)
+        if figure:
+            st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
+    with right:
+        counts = pd.Series([item["anomaly_classification"] for item in accounts]).value_counts()
+        figure = chart_layout(px.pie(values=counts.values, names=counts.index,
+            color=counts.index, color_discrete_map={"NORMAL": "#37c7a0", "SUSPICIOUS": "#ee6b6e"}), 310)
+        st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
+    st.caption("Charts reflect the filtered account and transaction view, not the full dataset.")
+    render_suspicious_activity(accounts)
+
+
+def render_transactions(transactions, suspicious_indices):
+    st.markdown("#### Transaction intelligence")
+    if not transactions:
+        empty_state("No transactions match the current filters.")
+        return
+    frame = records_frame(transactions, suspicious_indices)
+    paged_frame(frame, "transaction_table_page")
+    amount_frame = frame.assign(Bin=pd.cut(frame["Amount"], bins=min(8, max(1, len(frame))),
+                                            duplicates="drop"))
+    st.plotly_chart(chart_layout(px.histogram(
+        amount_frame, x="Amount", nbins=min(8, len(frame)),
+        color="Status", color_discrete_map={"REVIEW": "#ee6b6e", "NORMAL": ACCENT},
+        title="Transaction amount distribution — filtered view",
+    ), 320),
+        use_container_width=True, config={"displayModeBar": False})
+
+
+def render_pattern_chart(patterns):
+    if not patterns:
+        empty_state("No complete similar-transaction groups match the current filters.")
+        return
+    frame = pd.DataFrame([{
+        "Pattern": pattern["pattern_id"],
+        "Type": pattern["pattern_type"],
+        "Matching transactions": pattern["matching_transactions"],
+    } for pattern in patterns])
+    st.plotly_chart(chart_layout(px.bar(
+        frame, x="Pattern", y="Matching transactions", color="Type",
+        title="Potential similar transaction patterns — filtered view",
+        hover_data=["Type"],
+    ), 320), use_container_width=True, config={"displayModeBar": False})
+
+
+def render_suspicious_activity(accounts):
+    if not accounts:
+        empty_state("No suspicious transaction activity matches the current filters.")
+        return
+    frame = pd.DataFrame([{
+        "Account": item["account"],
+        "Suspicious transactions": item["suspicious_transaction_count"],
+    } for item in accounts if item["suspicious_transaction_count"] > 0])
+    if frame.empty:
+        empty_state("No suspicious transaction activity matches the current filters.")
+        return
+    st.plotly_chart(chart_layout(px.bar(
+        frame.sort_values("Suspicious transactions"),
+        x="Suspicious transactions", y="Account", orientation="h",
+        title="Suspicious transactions per account — filtered view",
+        color="Suspicious transactions",
+        color_continuous_scale=["#f0b35b", "#ee6b6e"],
+    ), 330).update_layout(coloraxis_showscale=False, yaxis_title=None),
+        use_container_width=True, config={"displayModeBar": False})
+
+
+def render_accounts(accounts, all_records, patterns):
+    st.markdown("#### Account investigation")
+    if not accounts:
+        empty_state("No accounts match the current filters.")
+        return
+    frame = pd.DataFrame([{
+        "Account": item["account"], "Risk": item["risk_level"], "Score": item["risk_score"],
+        "Transactions": item["total_transactions"],
+        "Suspicious Transactions": item["suspicious_transaction_count"],
+        "Distinct Patterns": item["distinct_pattern_count"],
+        "Rule Triggers": item["detection_rule_count"],
+        "Anomaly": item["anomaly_classification"],
+    } for item in accounts])
+    paged_frame(frame, "account_table_page")
+    displayed_accounts = frame["Account"].tolist()[:500]
+    selected = st.selectbox("Account under investigation", displayed_accounts)
+    item = next(account for account in accounts if account["account"] == selected)
+    cols = st.columns(4)
+    cols[0].metric("Risk score", item["risk_score"])
+    cols[1].metric("Suspicious transactions", item["suspicious_transaction_count"])
+    cols[2].metric("Distinct patterns", item["distinct_pattern_count"])
+    cols[3].metric("Anomaly", item["anomaly_classification"])
+    if item["reasons"]:
+        st.write("Detection explanations: " + "; ".join(item["reasons"]))
+    selected_records = [record for record in all_records if record["index"] in item["transaction_indices"]]
+    paged_frame(
+        records_frame(selected_records, item["suspicious_transaction_indices"]),
+        "account_transactions_page",
+    )
+    related = sorted({account for record in selected_records for account in record["accounts"]
+                      if account != selected})
+    st.caption("Related accounts: " + (", ".join(related) if related else "None"))
+    account_patterns = [pattern for pattern in patterns if selected in pattern["accounts"]]
+    if account_patterns:
+        st.dataframe(pd.DataFrame(account_patterns)[
+            ["pattern_id", "pattern_type", "matching_transactions", "amount_min", "amount_max", "explanation"]
+        ], use_container_width=True, hide_index=True)
+
+
+def render_network(results, accounts):
+    st.markdown("#### Network analysis")
+    stats = results["graph_statistics"]
+    metrics = st.columns(4)
+    metrics[0].metric("Nodes in full graph", stats["node_count"])
+    metrics[1].metric("Edges in full graph", stats["edge_count"])
+    metrics[2].metric("Cycles", stats["cycle_count"])
+    metrics[3].metric("Visible nodes", min(len(accounts), 40))
+    if not accounts:
+        empty_state("No accounts match the current filters.")
+        return
+    max_nodes = st.slider("Maximum visible nodes", 5, 100, min(40, max(5, len(accounts))))
+    figure = graph_figure(results["graph"], accounts, stats["cycles"], max_nodes)
+    if figure:
+        st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
+    else:
+        empty_state("No transfer relationships exist in the filtered view.")
+
+
+def render_anomalies(accounts):
+    st.markdown("#### AI anomaly detection")
+    if not accounts:
+        empty_state("No anomaly records match the current filters.")
+        return
+    frame = pd.DataFrame([{
+        "Account": item["account"], "Anomaly Score": item["anomaly_score"],
+        "Classification": item["anomaly_classification"], "Risk Level": item["risk_level"],
+    } for item in accounts]).sort_values("Anomaly Score", ascending=False)
+    paged_frame(frame, "anomaly_table_page")
+    st.plotly_chart(chart_layout(px.bar(frame.head(15).sort_values("Anomaly Score"),
+        x="Anomaly Score", y="Account", orientation="h", color="Classification",
+        color_discrete_map={"NORMAL": "#37c7a0", "SUSPICIOUS": "#ee6b6e"}), 360),
+        use_container_width=True, config={"displayModeBar": False})
+
+
+def render_reports(results, transactions, accounts, patterns):
+    st.markdown("#### Reports and exports")
+    report = generate_report({item["account"]: {
+        "account": item["account"], "score": item["risk_score"], "level": item["risk_level"],
+        "reasons": item["reasons"],
+    } for item in accounts}, len(accounts))
+    st.caption("This report covers the current filtered subset. The CLI export remains dataset-wide.")
+    full_report = generate_report(results["risk_scores"], results["total_accounts"])
+    st.download_button("Download full dataset TXT report", full_report,
+                       "aml_full_report.txt", "text/plain")
+    transaction_lines = [
+        "",
+        "FILTERED TRANSACTIONS",
+        "Transactions: " + str(len(transactions)),
     ]
-    node_sizes = [18 + graph.degree(node) * 9 for node in graph.nodes]
-    node_lines = ["#f05d5e" if node in cycle_accounts else "#d9e6f5" for node in graph.nodes]
+    transaction_lines.extend(
+        record["transaction_id"] + " | " + record["type"]
+        + " | " + str(record["amount"])
+        for record in transactions
+    )
+    st.download_button("Download filtered TXT report", report + "\n" + "\n".join(transaction_lines),
+                       "aml_filtered_report.txt", "text/plain")
+    filtered_csv = records_frame(
+        transactions, results["suspicious_transaction_indices"]
+    ).to_csv(index=False)
+    st.download_button("Download filtered transaction CSV", filtered_csv,
+                       "aml_filtered_transactions.csv", "text/csv")
+    st.download_button("Download filtered account investigation CSV",
+                       pd.DataFrame(accounts).to_csv(index=False),
+                       "aml_filtered_accounts.csv", "text/csv")
+    if patterns:
+        st.download_button("Download similarity groups CSV", pd.DataFrame(patterns).to_csv(index=False),
+                           "similar_transaction_patterns.csv", "text/csv")
+    st.code(report, language="text")
 
-    figure = go.Figure()
-    figure.add_trace(go.Scatter(
-        x=edge_x,
-        y=edge_y,
-        mode="lines",
-        line=dict(color="#52657f", width=1.6, shape="spline"),
-        hoverinfo="none",
-        showlegend=False,
-    ))
-    figure.add_trace(go.Scatter(
-        x=node_x,
-        y=node_y,
-        mode="markers+text",
-        text=list(graph.nodes),
-        textposition="top center",
-        textfont=dict(color="#dce7f4", size=11),
-        marker=dict(size=node_sizes, color=node_colors, line=dict(color=node_lines, width=2)),
-        customdata=[[graph.degree(node)] for node in graph.nodes],
-        hovertemplate="<b>%{text}</b><br>Transfer activity: %{customdata[0]}<extra></extra>",
-        showlegend=False,
-    ))
-    return figure.update_layout(
-        template=PLOTLY_TEMPLATE,
-        height=570,
-        margin=dict(l=20, r=20, t=20, b=20),
-        paper_bgcolor="#121d2c",
-        plot_bgcolor="#121d2c",
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        hovermode="closest",
+
+def available_datasets():
+    options = {}
+    if (GENERATED_DIR / "transactions.csv").exists() and (GENERATED_DIR / "accounts.csv").exists():
+        options["Generated synthetic dataset (validated on load)"] = (
+            GENERATED_DIR / "transactions.csv", GENERATED_DIR / "accounts.csv"
+        )
+    options["Compiler sample dataset (12 transactions)"] = (TRANSACTIONS_FILE, None)
+    return options
+
+
+def dataset_version(dataset_path, accounts_path):
+    """Return a cache key that changes when either source file is replaced."""
+    transaction_stat = Path(dataset_path).stat()
+    account_stat = Path(accounts_path).stat()
+    return (
+        transaction_stat.st_mtime_ns, transaction_stat.st_size,
+        account_stat.st_mtime_ns, account_stat.st_size,
     )
 
 
-def render_overview(results):
-    section_heading("Executive overview", "Risk posture at a glance", "Rule-based detections and model signals from the current transaction file.")
-    chart_columns = st.columns(3)
-    with chart_columns[0].container():
-        st.plotly_chart(make_risk_distribution(results), use_container_width=True, config={"displayModeBar": False})
-    with chart_columns[1].container():
-        top_chart = make_top_risk_chart(results)
-        if top_chart is None:
-            st.info("No data available")
+def render_login():
+    st.markdown(
+        '<div class="login-card"><div class="eyebrow">Academic financial intelligence platform</div>'
+        '<div class="hero-title">' + ORGANIZATION + '</div><div class="hero-subtitle">'
+        + PLATFORM + " — " + TAGLINE + "</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.warning(DISCLAIMER)
+    with st.form("login_form"):
+        username = st.text_input("Demonstration username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in", type="primary")
+    st.caption("Demo accounts are documented in README.md. This local login is for academic demonstration only.")
+    if submitted:
+        identity = authenticate(username, password)
+        if identity is None:
+            st.error("Invalid demonstration credentials.")
         else:
-            st.plotly_chart(top_chart, use_container_width=True, config={"displayModeBar": False})
-    with chart_columns[2].container():
-        st.plotly_chart(make_detection_chart(results), use_container_width=True, config={"displayModeBar": False})
+            st.session_state["identity"] = identity
+            append_audit(AUDIT_FILE, identity, "LOGIN")
+            st.rerun()
 
 
-def render_risk_analysis(results, minimum_score, selected_level, suspicious_only):
-    section_heading("Risk analysis", "Account risk register", "Filter the register from the sidebar and sort any column directly in the table.")
-    rows = risk_rows(results, minimum_score, selected_level, suspicious_only)
-    show_table(rows, ["Account", "Risk Score", "Risk Level", "Flags"], styled=True)
+def render_command_dashboard(results, dataset, accounts, transactions):
+    st.markdown("#### Command dashboard")
+    dataset_accounts = results["account_intelligence"]
+    kpis = st.columns(4)
+    for column, label, value in zip(
+        kpis,
+        ("Accounts monitored", "Transactions analyzed", "Transaction volume", "Suspicious findings"),
+        (dataset["account_count"], dataset["transaction_count"],
+         f"{dataset['transaction_volume']:,.0f}",
+         len(results["suspicious_transaction_indices"])),
+    ):
+        column.metric(label, value)
+    secondary_kpis = st.columns(3)
+    secondary_kpis[0].metric(
+        "Simulation dates", dataset["start_date"] + " to " + dataset["end_date"],
+    )
+    secondary_kpis[1].metric(
+        "High-risk accounts", sum(item["risk_level"] == "HIGH" for item in dataset_accounts),
+    )
+    secondary_kpis[2].metric(
+        "Open cases", len([case for case in load_cases(CASES_FILE) if case["status"] != "Closed"]),
+    )
+    st.caption(
+        "Dataset-wide metrics are calculated from the selected validated files. "
+        f"Cached AML analysis: {results.get('analysis_seconds', 'n/a')} seconds."
+    )
+    activity = pd.DataFrame(results["activity_by_date"])
+    if not activity.empty:
+        left, right = st.columns(2)
+        with left:
+            st.plotly_chart(
+                chart_layout(px.line(
+                    activity, x="Date", y=["Transactions", "Suspicious"],
+                    title="Transaction activity over time",
+                ), 340),
+                use_container_width=True, config={"displayModeBar": False},
+            )
+        type_counts = pd.DataFrame([
+            {"Type": transaction_type, "Transactions": count}
+            for transaction_type, count in results["transaction_type_counts"].items()
+        ])
+        with right:
+            st.plotly_chart(
+                chart_layout(px.bar(
+                    type_counts, x="Type", y="Transactions",
+                    title="Transaction type distribution",
+                    color="Type",
+                    color_discrete_sequence=[ACCENT, "#37c7a0", "#f0b35b"],
+                ), 340),
+                use_container_width=True, config={"displayModeBar": False},
+            )
+    st.markdown("#### Highest-risk accounts")
+    st.dataframe(pd.DataFrame(dataset_accounts[:15])[[
+        "account", "risk_level", "risk_score", "suspicious_transaction_count",
+        "anomaly_classification",
+    ]], use_container_width=True, hide_index=True)
 
 
-def render_graph_analytics(results):
-    section_heading("Graph analytics", "Transaction relationship intelligence", "Node size represents transfer activity. Colored nodes are rule-flagged accounts; red outlines identify cycle participants.")
-    statistics = results["graph_statistics"]
-    metrics = st.columns(4)
-    metrics[0].metric("Graph Nodes", statistics["node_count"])
-    metrics[1].metric("Transfer Edges", statistics["edge_count"])
-    metrics[2].metric("Circular Cycles", statistics["cycle_count"])
-    metrics[3].metric("Suspicious Hubs", len(statistics["suspicious_hubs"]))
-    figure = graph_figure(results["graph"], results["risk_scores"], statistics["cycles"])
-    if figure is None:
-        st.info("No transfer graph available")
-    else:
-        st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
-    top_accounts = statistics["top_connected_accounts"]
-    if top_accounts:
-        st.dataframe(pd.DataFrame(top_accounts), use_container_width=True, hide_index=True)
-    else:
-        st.info("No data available")
+def render_monitoring(results):
+    st.markdown("#### Transaction monitoring")
+    query = st.text_input("Search transaction ID or account", key="transaction_search")
+    minimum, maximum = st.slider("Amount range", 0, 1000000, (0, 1000000), 1000)
+    types = st.multiselect("Transaction types", ["TRANSFER", "DEPOSIT", "WITHDRAW"],
+                           default=["TRANSFER", "DEPOSIT", "WITHDRAW"], key="monitor_types")
+    records = filter_transactions(
+        results["transaction_records"], query, types, minimum, maximum,
+        results["records_by_account"], results["record_indices_by_transaction_id"],
+    )
+    page_size = 50
+    page = st.number_input("Page", 1, max(1, (len(records) + page_size - 1) // page_size), 1)
+    st.caption("Showing " + str(len(records)) + " matching records; pages are limited to 50 rows.")
+    render_transactions(records[(page - 1) * page_size:page * page_size],
+                        results["suspicious_transaction_indices"])
 
 
-def render_anomaly_detection(results):
-    section_heading("Anomaly detection", "AI-assisted account review", "IsolationForest scores are model signals and complement the explainable rule-based risk score.")
-    anomaly_rows = [
-        {
-            "Account": result["account"],
-            "Anomaly Score": result["score"],
-            "Classification": result["classification"],
-        }
-        for result in results["anomaly_results"]
-    ]
-    show_table(anomaly_rows, ["Account", "Anomaly Score", "Classification"])
-    top_anomalies = results["anomaly_results"][:10]
-    if top_anomalies:
-        dataframe = pd.DataFrame({"Account": [item["account"] for item in top_anomalies], "Anomaly Score": [item["score"] for item in top_anomalies]})
-        figure = px.bar(
-            dataframe.sort_values("Anomaly Score"),
-            x="Anomaly Score",
-            y="Account",
-            orientation="h",
-            color="Anomaly Score",
-            color_continuous_scale=[[0, "#27c499"], [0.65, "#f5b942"], [1, "#f05d5e"]],
-            template=PLOTLY_TEMPLATE,
-            height=360,
-        ).update_layout(coloraxis_showscale=False, margin=dict(l=10, r=10, t=20, b=10), yaxis_title=None)
-        st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
-    else:
-        st.info("No data available")
+def render_suspicious_center(results, accounts):
+    st.markdown("#### Suspicious activity center")
+    suspicious = [item for item in accounts if item["suspicious_transaction_count"] > 0]
+    if not suspicious:
+        st.info("No suspicious activity findings are present.")
+        return
+    paged_frame(pd.DataFrame(suspicious)[[
+        "account", "risk_level", "risk_score", "suspicious_transaction_count",
+        "suspicious_transaction_amount", "reasons",
+    ]], "suspicious_accounts_page")
+    st.caption("Risk scores are analytical signals requiring investigation, not findings of guilt.")
 
 
-def render_reports(results):
-    section_heading("Reports", "Compliance review workspace", "Use the tabs to move between executive context and detailed findings.")
-    report_text = generate_report(results["risk_scores"], results["total_accounts"])
-    overview_tab, findings_tab, graph_tab, ai_tab = st.tabs(["Overview", "AML Findings", "Graph Insights", "AI Findings"])
-    with overview_tab:
-        st.metric("Accounts Under Review", results["total_accounts"])
-        st.metric("Transactions Analyzed", results["total_transactions"])
-        st.caption("Generated from the parsed transaction AST and current analysis configuration.")
-        st.code(report_text, language="text")
-    with findings_tab:
-        findings = results["risk_scores"]
-        if findings:
-            for account, item in sorted(findings.items()):
-                with st.expander(account + "  |  " + item["level"] + "  |  " + str(item["score"]) + " points"):
-                    for reason in item["reasons"]:
-                        st.write("- " + reason)
-        else:
-            st.info("No data available")
-    with graph_tab:
-        statistics = results["graph_statistics"]
-        st.write("Nodes: " + str(statistics["node_count"]))
-        st.write("Edges: " + str(statistics["edge_count"]))
-        st.write("Cycles: " + str(statistics["cycle_count"]))
-        if statistics["cycles"]:
-            for cycle in statistics["cycles"]:
-                st.write(" -> ".join(cycle))
-        else:
-            st.info("No data available")
-    with ai_tab:
-        if results["anomaly_results"]:
-            st.dataframe(pd.DataFrame([
-                {"Account": item["account"], "Anomaly Score": item["score"], "Classification": item["classification"]}
-                for item in results["anomaly_results"]
-            ]), use_container_width=True, hide_index=True)
-        else:
-            st.info("No data available")
+def render_cases(identity, results):
+    st.markdown("#### Investigation case management")
+    cases = load_cases(CASES_FILE)
+    if can(identity, "manage_cases"):
+        with st.form("create_case"):
+            account = st.text_input("Related account ID")
+            transaction_id = st.text_input("Related transaction ID")
+            officer = st.text_input("Assigned officer", value=identity["username"])
+            notes = st.text_area("Investigation notes")
+            if st.form_submit_button("Create case"):
+                try:
+                    case = create_case(CASES_FILE, identity, [account], [transaction_id], officer, notes)
+                    append_audit(AUDIT_FILE, identity, "CASE_CREATED", case["case_id"])
+                    st.success("Created " + case["case_id"])
+                    st.rerun()
+                except (PermissionError, ValueError, OSError) as error:
+                    st.error(str(error))
+    if not cases:
+        st.info("No investigation cases have been created.")
+        return
+    st.dataframe(pd.DataFrame(cases), use_container_width=True, hide_index=True)
+    selected = st.selectbox("Case to update", [case["case_id"] for case in cases])
+    if can(identity, "manage_cases"):
+        status = st.selectbox("Status", ["New", "Under Review", "Escalated", "Closed"])
+        notes = st.text_area("Additional notes", key="case_update_notes")
+        if st.button("Save case update"):
+            update_case(CASES_FILE, identity, selected, status=status, notes=notes)
+            append_audit(AUDIT_FILE, identity, "CASE_UPDATED", selected)
+            st.success("Case updated.")
+    if can(identity, "approve_reports"):
+        decision = st.selectbox("Supervisor decision", ["Approved", "Rejected"])
+        if st.button("Record report decision"):
+            update_case(CASES_FILE, identity, selected, approval=decision)
+            append_audit(AUDIT_FILE, identity, "REPORT_DECISION", selected + ": " + decision)
+            st.success("Decision recorded.")
+
+
+def render_audit(identity):
+    st.markdown("#### Audit trail")
+    if not can(identity, "audit"):
+        st.error("Your role is not authorized to view audit records.")
+        return
+    st.caption("This is a local editable academic audit log, not a tamper-proof government record.")
+    entries = load_audit(AUDIT_FILE)
+    st.dataframe(pd.DataFrame(entries), use_container_width=True, hide_index=True)
+
+
+def render_admin(identity, dataset_options):
+    st.markdown("#### System administration")
+    if not can(identity, "administer_system"):
+        st.error("Only the System Administrator can access administration controls.")
+        return
+    with st.form("generate_dataset"):
+        st.markdown("##### Generate a synthetic dataset")
+        account_count = st.number_input("Accounts", 1000, 50000, 15000, 1000)
+        transaction_count = st.number_input("Transactions", 10000, 1000000, 200000, 10000)
+        days = st.number_input("Simulation days", 1, 365, 90)
+        seed = st.number_input("Random seed", 0, 2147483647, 42)
+        if st.form_submit_button("Generate data/generated"):
+            try:
+                result = generate_dataset(
+                    GENERATED_DIR, int(account_count), int(transaction_count),
+                    int(days), int(seed),
+                )
+                st.cache_data.clear()
+                append_audit(AUDIT_FILE, identity, "DATASET_GENERATED",
+                             str(result["transaction_count"]) + " transactions")
+                st.success("Generated " + str(result["account_count"]) + " accounts and "
+                           + str(result["transaction_count"]) + " transactions.")
+                st.rerun()
+            except (OSError, ValueError) as error:
+                st.error("Dataset generation failed: " + str(error))
+    st.write("Available datasets:")
+    for label, paths in dataset_options.items():
+        st.code(label + "\n" + str(paths[0]))
+    st.write("Demonstration users and permissions")
+    st.dataframe(pd.DataFrame([
+        {"Username": username, "Role": details[0],
+         "Permissions": ", ".join(sorted(PERMISSIONS[details[0]]))}
+        for username, details in DEMO_USERS.items()
+    ]), use_container_width=True, hide_index=True)
+    st.info("Dataset generation is performed with the documented CLI command; this page does not overwrite data automatically.")
 
 
 def main():
-    st.set_page_config(page_title="AML Intelligence Dashboard", page_icon="shield", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title=PLATFORM, page_icon="shield", layout="wide")
     inject_styles()
-    try:
-        results = load_results()
-    except (OSError, ValueError) as error:
-        st.error(str(error))
+    identity = st.session_state.get("identity")
+    if identity is None:
+        render_login()
         return
-
-    risk_values = [item["score"] for item in results["risk_scores"].values()]
-    average_risk = round(sum(risk_values) / len(risk_values), 1) if risk_values else 0
-    st.markdown('<div class="eyebrow">Compliance intelligence / live analysis</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hero-title">AI-Based Money Laundering Detection System</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hero-subtitle">Real-Time Risk Analysis and Transaction Intelligence</div>', unsafe_allow_html=True)
-
+    dataset_options = available_datasets()
     with st.sidebar:
-        st.markdown("## AML Intelligence")
-        st.caption("Enterprise monitoring workspace")
-        view = st.radio("Workspace", ["Dashboard", "Risk Analysis", "Graph Analytics", "Anomaly Detection", "Reports"], label_visibility="collapsed")
+        st.markdown("## NFI-AMD")
+        st.markdown("### " + PLATFORM)
+        st.caption(TAGLINE)
+        st.success(identity["role"])
+        if st.button("Log out"):
+            append_audit(AUDIT_FILE, identity, "LOGOUT")
+            st.session_state.pop("identity", None)
+            st.rerun()
+        allowed_views = ["Command Dashboard", "About FITMS"]
+        if can(identity, "review_alerts"):
+            allowed_views.extend(["Transaction Monitoring", "Suspicious Activity Center"])
+        if can(identity, "investigate_accounts"):
+            allowed_views.extend(["Account Intelligence", "Network Investigation"])
+        if can(identity, "reports"):
+            allowed_views.append("Reports and Exports")
+        if can(identity, "manage_cases"):
+            allowed_views.append("Case Management")
+        if can(identity, "audit"):
+            allowed_views.append("Audit Trail")
+        if can(identity, "administer_system"):
+            allowed_views.append("System Administration")
+        view = st.radio("Workspace", allowed_views)
         st.divider()
-        st.markdown("#### Review filters")
-        minimum_score = st.slider("Minimum Risk Score", 0, 100, 0, 5)
-        selected_level = st.selectbox("Risk Level", ["ALL", "HIGH", "MEDIUM", "LOW"])
-        suspicious_only = st.toggle("Suspicious Accounts Only", value=False)
+        dataset_label = st.selectbox("Dataset", list(dataset_options))
+        dataset_path, accounts_path = dataset_options[dataset_label]
+        if accounts_path is None:
+            st.warning("The compiler sample is for language testing; it is not the operational city dataset.")
+            st.stop()
+        st.caption("Loaded file: " + str(dataset_path))
         st.divider()
-        st.caption("Source: " + TRANSACTIONS_FILE.name)
-        st.caption("Pipeline status: analysis complete")
+        st.markdown("#### Analysis parameters")
+        tolerance = st.number_input("Similarity tolerance (%)", 0.0, 100.0, 2.0, .5, key="similarity_tolerance")
+        absolute_tolerance = st.number_input("Absolute amount tolerance", 0.0, 1000000.0, 0.0, 100.0, key="similarity_absolute_tolerance")
+        minimum_matches = st.number_input("Minimum matching transactions", 1, 100, 2, key="similarity_minimum_matches")
+        minimum_accounts = st.number_input("Minimum accounts", 1, 100, 2, key="similarity_minimum_accounts")
+        types = st.multiselect("Transaction types", ["TRANSFER", "DEPOSIT", "WITHDRAW"],
+                               default=["TRANSFER", "DEPOSIT", "WITHDRAW"], key="transaction_types")
+        st.divider()
+        st.markdown("#### View filters")
+        account_query = st.text_input("Account search", key="account_search")
+        risk_level = st.selectbox("Risk level", ["ALL", "HIGH", "MEDIUM", "LOW"], key="risk_level")
+        minimum_score, maximum_score = st.slider("Risk score range", 0, 100, (0, 100), key="risk_score_range")
+        suspicious_only = st.checkbox("Suspicious accounts only", key="suspicious_only")
+        anomaly = st.selectbox("Anomaly classification", ["ALL", "SUSPICIOUS", "NORMAL"], key="anomaly_classification")
+        minimum_suspicious = st.number_input("Minimum suspicious transactions", 0, 100, 0, key="minimum_suspicious")
+        minimum_amount, maximum_amount = st.slider("Transaction amount range", 0, 1000000, (0, 1000000), 1000, key="transaction_amount_range")
+        if st.button("Reset filters"):
+            for key in (
+                "similarity_tolerance", "similarity_absolute_tolerance",
+                "similarity_minimum_matches", "similarity_minimum_accounts",
+                "transaction_types", "account_search", "risk_level",
+                "risk_score_range", "suspicious_only", "anomaly_classification",
+                "minimum_suspicious", "transaction_amount_range",
+            ):
+                st.session_state.pop(key, None)
+            st.rerun()
+    try:
+        version = dataset_version(dataset_path, accounts_path)
+        dataset = load_dataset(str(dataset_path), str(accounts_path), version)
+        results = load_results(str(dataset_path), str(accounts_path), tolerance, absolute_tolerance,
+                               minimum_matches, minimum_accounts, tuple(types), version)
+    except (OSError, ValueError, RuntimeError) as error:
+        st.error("Dataset loading or AML analysis failed: " + str(error))
+        return
+    if not results["transaction_records"]:
+        st.warning("The selected dataset is empty.")
+        return
+    filtered_transactions = filter_transactions(
+        results["transaction_records"], account_query, types, minimum_amount, maximum_amount,
+        results["records_by_account"], results["record_indices_by_transaction_id"],
+    )
+    transaction_scope_active = (
+        set(types) != {"TRANSFER", "DEPOSIT", "WITHDRAW"}
+        or minimum_amount > 0
+        or maximum_amount < 1000000
+    )
+    filtered_indices = {
+        record["index"] for record in filtered_transactions
+    }
+    filtered_accounts = filter_accounts(
+        results["account_intelligence"], account_query, risk_level,
+        minimum_score, maximum_score, suspicious_only, anomaly,
+        minimum_suspicious,
+        filtered_indices if transaction_scope_active else None,
+    )
+    account_names = {item["account"] for item in filtered_accounts}
+    account_filter_active = bool(
+        account_query or risk_level != "ALL" or minimum_score > 0
+        or maximum_score < 100 or suspicious_only or anomaly != "ALL"
+        or minimum_suspicious > 0
+    )
+    if account_filter_active:
+        filtered_transactions = [
+            record for record in filtered_transactions
+            if account_names.intersection(record["accounts"])
+        ]
+    filtered_patterns = filter_patterns(results["similar_patterns"],
+                                        [record["index"] for record in filtered_transactions])
 
-    kpis = st.columns(5)
-    kpis[0].metric("Total Accounts", results["total_accounts"])
-    kpis[1].metric("Total Transactions", results["total_transactions"])
-    kpis[2].metric("Suspicious Accounts", len(results["risk_scores"]))
-    kpis[3].metric("Average Risk Score", average_risk)
-    kpis[4].metric("Circular Transfer Cycles", results["graph_statistics"]["cycle_count"])
-    st.markdown('<div class="source-note">Rule engine and IsolationForest results are calculated from the existing parsed AST.</div>', unsafe_allow_html=True)
-    st.divider()
-
-    if view == "Dashboard":
-        render_overview(results)
-        st.divider()
-        render_risk_analysis(results, minimum_score, selected_level, suspicious_only)
-    elif view == "Risk Analysis":
-        render_risk_analysis(results, minimum_score, selected_level, suspicious_only)
-    elif view == "Graph Analytics":
-        render_graph_analytics(results)
-    elif view == "Anomaly Detection":
-        render_anomaly_detection(results)
+    st.markdown('<div class="eyebrow">NFI-AMD / authenticated intelligence workspace</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-title">' + PLATFORM + '</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-subtitle">' + TAGLINE + ' — ' + identity["role"] + '</div>', unsafe_allow_html=True)
+    if view == "Command Dashboard":
+        render_command_dashboard(results, dataset, filtered_accounts, filtered_transactions)
+    elif view == "Transaction Monitoring":
+        render_monitoring(results)
+    elif view == "Account Intelligence":
+        render_accounts(filtered_accounts, results["transaction_records"], filtered_patterns)
+    elif view == "Suspicious Activity Center":
+        render_suspicious_center(results, filtered_accounts)
+    elif view == "Network Investigation":
+        render_network(results, filtered_accounts)
+    elif view == "Case Management":
+        render_cases(identity, results)
+    elif view == "Audit Trail":
+        render_audit(identity)
+    elif view == "System Administration":
+        render_admin(identity, dataset_options)
+    elif view == "About FITMS":
+        st.markdown("#### About FITMS")
+        st.write(ORGANIZATION)
+        st.write(PLATFORM)
+        st.write(TAGLINE)
+        st.info(DISCLAIMER)
+        st.caption("All records and findings are synthetic. This local workflow is not affiliated with any government agency.")
     else:
-        render_reports(results)
+        render_reports(results, filtered_transactions, filtered_accounts, filtered_patterns)
+    st.divider()
+    st.caption(DISCLAIMER)
 
 
 if __name__ == "__main__":

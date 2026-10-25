@@ -5,7 +5,7 @@ import networkx as nx
 from compiler.ast_nodes import TransferNode
 
 
-def detect_circular_transfers(program):
+def detect_circular_transfers(program, max_cycles=None):
     """Return directed account cycles, with the starting account repeated at the end."""
     graph = nx.DiGraph()
     for statement in program.statements:
@@ -14,6 +14,8 @@ def detect_circular_transfers(program):
 
     cycles = []
     seen = set()
+    if max_cycles == 0:
+        return cycles
     for cycle in nx.simple_cycles(graph):
         smallest_rotation = min(
             tuple(cycle[index:] + cycle[:index]) for index in range(len(cycle))
@@ -21,6 +23,8 @@ def detect_circular_transfers(program):
         if smallest_rotation not in seen:
             seen.add(smallest_rotation)
             cycles.append(list(smallest_rotation) + [smallest_rotation[0]])
+            if max_cycles is not None and len(cycles) >= max_cycles:
+                break
     return cycles
 
 

@@ -1,5 +1,6 @@
-"""Simple high-frequency analysis over the ordered AST statements."""
+"""Timestamp-aware high-frequency analysis with an ordered fallback."""
 
+from datetime import datetime
 from compiler.ast_nodes import DepositNode, TransferNode, WithdrawNode
 
 
@@ -20,13 +21,17 @@ def detect_high_frequency(program, window_minutes=5, minimum_transaction_count=4
     """
     events_by_account = {}
     for index, statement in enumerate(program.statements):
-        event_time = index * transaction_interval_minutes
+        timestamp = getattr(statement, "timestamp", None)
+        if timestamp is None:
+            event_time = index * transaction_interval_minutes
+        else:
+            event_time = datetime.fromisoformat(timestamp).timestamp() / 60
         for account in _accounts_for(statement):
-            events_by_account.setdefault(account, []).append((event_time, statement))
+            events_by_account.setdefault(account, []).append((event_time, index, statement))
 
     findings = []
     for account, events in events_by_account.items():
-        for start_index, (start_time, _) in enumerate(events):
+        for start_index, (start_time, _, _) in enumerate(events):
             matching = [
                 event for event in events[start_index:]
                 if event[0] - start_time <= window_minutes
@@ -38,6 +43,7 @@ def detect_high_frequency(program, window_minutes=5, minimum_transaction_count=4
                     "window_minutes": window_minutes,
                     "start_minute": start_time,
                     "end_minute": matching[-1][0],
+                    "transaction_indices": [event[1] for event in matching],
                     "reason": (
                         str(len(matching)) + " transactions in "
                         + str(window_minutes) + " minutes."

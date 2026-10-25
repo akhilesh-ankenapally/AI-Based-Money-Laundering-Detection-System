@@ -65,9 +65,23 @@ def calculate_degree_statistics(graph):
     }
 
 
-def analyze_graph(graph, top_n=5, minimum_hub_degree=3):
+def analyze_graph(graph, top_n=5, minimum_hub_degree=3, max_cycles=None):
     """Return the requested graph summary in one dictionary."""
-    cycles = [cycle + [cycle[0]] for cycle in nx.simple_cycles(graph)]
+    cycles = []
+    if max_cycles == 0:
+        return {
+            "node_count": graph.number_of_nodes(),
+            "edge_count": graph.number_of_edges(),
+            "cycle_count": 0,
+            "cycles": [],
+            "top_connected_accounts": find_highly_connected_accounts(graph, top_n),
+            "suspicious_hubs": detect_suspicious_hubs(graph, minimum_hub_degree),
+            "degree_statistics": calculate_degree_statistics(graph),
+        }
+    for cycle in nx.simple_cycles(graph):
+        cycles.append(cycle + [cycle[0]])
+        if max_cycles is not None and len(cycles) >= max_cycles:
+            break
     return {
         "node_count": graph.number_of_nodes(),
         "edge_count": graph.number_of_edges(),

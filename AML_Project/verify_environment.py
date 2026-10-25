@@ -12,7 +12,6 @@ REQUIRED_IMPORTS = [
     ("ply", "ply"),
     ("networkx", "networkx"),
     ("pandas", "pandas"),
-    ("matplotlib", "matplotlib"),
     ("numpy", "numpy"),
     ("scikit-learn", "sklearn"),
     ("streamlit", "streamlit"),

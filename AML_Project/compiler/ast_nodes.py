@@ -27,9 +27,11 @@ class ProgramNode:
 class DepositNode:
     """AST node representing a deposit transaction."""
 
-    def __init__(self, account_id, amount):
+    def __init__(self, account_id, amount, timestamp=None, transaction_id=None):
         self.account_id = account_id
         self.amount = amount
+        self.timestamp = timestamp
+        self.transaction_id = transaction_id
 
     def to_lines(self):
         return [
@@ -42,9 +44,11 @@ class DepositNode:
 class WithdrawNode:
     """AST node representing a withdrawal transaction."""
 
-    def __init__(self, account_id, amount):
+    def __init__(self, account_id, amount, timestamp=None, transaction_id=None):
         self.account_id = account_id
         self.amount = amount
+        self.timestamp = timestamp
+        self.transaction_id = transaction_id
 
     def to_lines(self):
         return [
@@ -57,10 +61,13 @@ class WithdrawNode:
 class TransferNode:
     """AST node representing a transfer between two accounts."""
 
-    def __init__(self, source_account, destination_account, amount):
+    def __init__(self, source_account, destination_account, amount,
+                 timestamp=None, transaction_id=None):
         self.source_account = source_account
         self.destination_account = destination_account
         self.amount = amount
+        self.timestamp = timestamp
+        self.transaction_id = transaction_id
 
     def to_lines(self):
         return [
